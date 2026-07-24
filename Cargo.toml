@@ -7,6 +7,7 @@ description = "A library for IL2P in pure Rust."
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["il2p", "packet-radio", "radio"]
+repository = "https://github.com/liamsto/il2p-rs"
 
 [lib]
 name = "il2p"
