@@ -1,0 +1,17 @@
+[package]
+name = "il2p-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+description = "A library for IL2P in pure Rust."
+readme = "README.md"
+license = "Apache-2.0"
+keywords = ["il2p", "packet-radio", "radio"]
+
+[lib]
+name = "il2p"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
