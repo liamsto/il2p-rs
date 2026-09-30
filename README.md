@@ -1,17 +1,10 @@
 # il2p-rs
 
-**Current compatible IL2P version: v0.6**
+**Compatible with IL2P v0.6**
 
-A simple, dependency-free Rust implementation of IL2P for packet radio. Layer 2 only.
+A dependency-free Rust implementation of [IL2P](https://en.wikipedia.org/wiki/Improved_Layer_2_Protocol) for packet radio.
 
-- Type 0 transparent and typed Type 1 frames
-- Scrambling
-- GF(256) Reed–Solomon encoding and correction
-- 16-symbol payload parity
-- Optional CRC-16/X-25 with Hamming (7,4)
-- MSB streaming receive and one-bit sync tolerance
-
-Please see the [IL2P specification](https://tarpn.net/t/il2p/il2p-specification_draft_v0-6.pdf) for technical information.
+See the [IL2P specification](https://tarpn.net/t/il2p/il2p-specification_draft_v0-6.pdf) for technical information.
 
 ## Framing
 
@@ -43,14 +36,14 @@ Physical-layer implementations can feed into `Receiver` one bit at a time. Modul
 
 ## Verification
 
-A handful of tests are included for checking compatibility with the spec:
+A handful of tests exist to check spec compatibility:
 
-- checks the lib's packets against the draft v0.6 example packets
+- Checks the lib's packets against the draft v0.6 example packets
 - Type 0 and Type 1 round trips
-- validation of typed callsigns, protocol IDs, and controls
-- correction of one header symbol and eight payload symbols
-- rejection through the trailing CRC when a bad RS correction is possible
-- one bit tolerant sync acquisition at arbitrary bit alignment
+- Typed callsigns, protocol IDs, and controls
+- Correction of one header symbol and eight payload symbols
+- Rejection through the trailing CRC when a bad RS correction is possible
+- Sync acquisition w/ tolerance
 - Hamming bit correction and the standard CRC check value
 
 Run it with:
