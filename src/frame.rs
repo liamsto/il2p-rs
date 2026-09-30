@@ -187,7 +187,7 @@ fn read_header(input: &[u8]) -> Result<([u8; HEADER_LEN], usize, Kind, usize), E
 
     let mut header = [0u8; HEADER_LEN];
     scramble::descramble(&coded[..HEADER_LEN], &mut header);
-    if header[0] & 0x80 != 0 || header[12] & 0xc0 != 0 {
+    if header[0] & 0x80 != 0 {
         return Err(Error::Header);
     }
 
@@ -195,7 +195,7 @@ fn read_header(input: &[u8]) -> Result<([u8; HEADER_LEN], usize, Kind, usize), E
     let kind = if header[1] & 0x80 != 0 {
         Kind::Translated
     } else {
-        if header.iter().any(|byte| byte & 0x7f != 0) || count < 14 {
+        if header[..12].iter().any(|byte| byte & 0x7f != 0) || header[12] != 0 || count < 14 {
             return Err(Error::Header);
         }
         Kind::Transparent
