@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::{
-    Error,
+    Error, MAX_PAYLOAD,
     packet::{Call, Control, Frame, Pid, SKind, UKind},
 };
 
 const HEADER_LEN: usize = 13;
+const U_CONTROL: [u8; 8] = [0x2f, 0x43, 0x0f, 0x63, 0x87, 0x03, 0xaf, 0xe3];
 
 const fn set_lane(header: &mut [u8; HEADER_LEN], bit: u8, end: usize, width: usize, value: u16) {
     let mut i = 0;
@@ -82,14 +83,6 @@ const fn u_kind(code: u8, pid: Pid) -> UKind {
     }
 }
 
-const fn ax_pid(pid: Pid) -> u8 {
-    const PID: [u8; 16] = [
-        0xf0, 0xf0, 0x20, 0x01, 0x06, 0x07, 0x08, 0xf0, 0xf0, 0xf0, 0xf0, 0xcc, 0xcd, 0xce, 0xcf,
-        0xf0,
-    ];
-    PID[pid.code() as usize]
-}
-
 fn set_calls(header: &mut [u8; HEADER_LEN], dst: Call, src: Call) {
     for (byte, &ch) in header[..6].iter_mut().zip(dst.name()) {
         *byte = ch - 0x20;
@@ -108,7 +101,10 @@ fn get_call(data: &[u8]) -> [u8; 6] {
     name
 }
 
-pub(crate) fn encode(frame: &Frame, header: &mut [u8; HEADER_LEN]) -> Result<(), Error> {
+pub(crate) fn encode<B: AsRef<[u8]>>(
+    frame: &Frame<B>,
+    header: &mut [u8; HEADER_LEN],
+) -> Result<(), Error> {
     let Frame::Translated {
         dst,
         src,
@@ -118,7 +114,8 @@ pub(crate) fn encode(frame: &Frame, header: &mut [u8; HEADER_LEN]) -> Result<(),
     else {
         return Err(Error::Frame);
     };
-    if data.len() > 1023 {
+    let data = data.as_ref();
+    if data.len() > MAX_PAYLOAD {
         return Err(Error::TooLong);
     }
 
@@ -175,7 +172,7 @@ pub(crate) fn encode(frame: &Frame, header: &mut [u8; HEADER_LEN]) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn decode(header: &[u8; HEADER_LEN], data: Vec<u8>) -> Option<Frame> {
+pub(crate) fn decode<B>(header: &[u8; HEADER_LEN], data: B) -> Option<Frame<B>> {
     let ui = header[0] & 0x40 != 0;
     let pid = get_lane(header, 0x40, 4, 4) as u8;
     let compact = get_lane(header, 0x40, 11, 7) as u8;
@@ -234,33 +231,41 @@ pub(crate) fn decode(header: &[u8; HEADER_LEN], data: Vec<u8>) -> Option<Frame> 
     })
 }
 
-fn command(control: Control) -> bool {
+fn cmd(control: Control) -> bool {
     match control {
         Control::I { .. } => true,
         Control::S { command, .. } | Control::U { command, .. } => command,
     }
 }
 
-fn control_bytes(control: Control) -> (u8, Option<u8>) {
-    match control {
+fn control_bytes(control: Control) -> Result<(u8, Option<u8>), Error> {
+    Ok(match control {
         Control::I { nr, ns, poll, pid } => {
-            (nr << 5 | u8::from(poll) << 4 | ns << 1, Some(ax_pid(pid)))
+            if nr > 7 || ns > 7 {
+                return Err(Error::Frame);
+            }
+            (nr << 5 | u8::from(poll) << 4 | ns << 1, Some(pid.to_ax25()))
         }
         Control::S { nr, poll, kind, .. } => {
+            if nr > 7 {
+                return Err(Error::Frame);
+            }
             (nr << 5 | u8::from(poll) << 4 | s_code(kind) << 2 | 1, None)
         }
         Control::U { poll, kind, .. } => {
-            const CONTROL: [u8; 8] = [0x2f, 0x43, 0x0f, 0x63, 0x87, 0x03, 0xaf, 0xe3];
             let pid = match kind {
-                UKind::Ui(pid) => Some(ax_pid(pid)),
+                UKind::Ui(pid) => Some(pid.to_ax25()),
                 _ => None,
             };
-            (CONTROL[u_code(kind) as usize] | u8::from(poll) << 4, pid)
+            (U_CONTROL[u_code(kind) as usize] | u8::from(poll) << 4, pid)
         }
-    }
+    })
 }
 
-pub(crate) fn gen_frame(frame: &Frame, mut push: impl FnMut(u8)) -> Result<(), Error> {
+pub(crate) fn gen_frame<B: AsRef<[u8]>>(
+    frame: &Frame<B>,
+    mut push: impl FnMut(u8),
+) -> Result<(), Error> {
     let Frame::Translated {
         dst,
         src,
@@ -270,7 +275,8 @@ pub(crate) fn gen_frame(frame: &Frame, mut push: impl FnMut(u8)) -> Result<(), E
     else {
         return Err(Error::Frame);
     };
-    let command = command(*control);
+    let (ctl, pid) = control_bytes(*control)?;
+    let command = cmd(*control);
 
     for &ch in dst.name() {
         push(ch << 1);
@@ -281,13 +287,156 @@ pub(crate) fn gen_frame(frame: &Frame, mut push: impl FnMut(u8)) -> Result<(), E
     }
     push(0x61 | src.ssid() << 1 | u8::from(!command) << 7);
 
-    let (control, pid) = control_bytes(*control);
-    push(control);
+    push(ctl);
     if let Some(pid) = pid {
         push(pid);
     }
-    for &byte in data {
+    for &byte in data.as_ref() {
         push(byte);
     }
     Ok(())
+}
+
+impl<'a> Frame<&'a [u8]> {
+    /// Borrows an AX.25 frame, translating the header if all byte can
+    /// be preserved. Repeater paths, unknown controls or PIDs, and other
+    /// fields will use transparent encapsulation.
+    ///
+    /// Pass AX.25 bytes with no KISS command byte, HDLC flags, or
+    /// FCS. Set `extended` for modulo-128 links (or when the link mode is unknown)
+    /// to keep I/S frames transparent since control width can't be determined just
+    /// by using the packet.
+    ///
+    /// U frames have the same layout in both modes.
+    ///
+    /// The caller is responsible for AX.25 validity, but checks are done for length and
+    /// to see if it can be represented losslessly. Allocation/copy free..
+    ///
+    /// ```
+    /// use il2p::Frame;
+    /// // UI frame from KK4HEJ-15 to CQ, PID 0xf0.
+    /// let raw = [0x86, 0xa2, 0x40, 0x40, 0x40, 0x40, 0x60,
+    ///            0x96, 0x96, 0x68, 0x90, 0x8a, 0x94, 0xff, 0x03, 0xf0];
+    /// let frame = Frame::from_ax25(&raw, false)?;
+    /// assert!(matches!(frame, Frame::Translated { .. }));
+    /// let mut out = [0; 16];
+    /// assert_eq!(frame.write_ax25(&mut out)?, raw.len());
+    /// assert_eq!(out, raw);
+    /// # Ok::<(), il2p::Error>(())
+    /// ```
+    pub fn from_ax25(input: &'a [u8], extended: bool) -> Result<Self, Error> {
+        if input.len() < 15 {
+            return Err(Error::Truncated);
+        }
+        let frame = translate(input, extended).unwrap_or(Self::Transparent(input));
+        if frame.data().len() > MAX_PAYLOAD {
+            return Err(Error::TooLong);
+        }
+        Ok(frame)
+    }
+}
+
+impl<B: AsRef<[u8]>> Frame<B> {
+    /// Write AX.25 bytes.
+    /// Returns the number of bytes written. `MAX_PAYLOAD + 16` bytes will be enough for any frame.
+    /// Alloc free, a short buffer will return [`Error::Buffer`] and will not write.
+    pub fn write_ax25(&self, output: &mut [u8]) -> Result<usize, Error> {
+        let data = self.data();
+        if data.len() > MAX_PAYLOAD {
+            return Err(Error::TooLong);
+        }
+        let len = match self {
+            Self::Transparent(_) => {
+                if data.len() < 14 {
+                    return Err(Error::Frame);
+                }
+                data.len()
+            }
+            Self::Translated { control, .. } => {
+                let (_, pid) = control_bytes(*control)?;
+                15 + usize::from(pid.is_some()) + data.len()
+            }
+        };
+        let output = output.get_mut(..len).ok_or(Error::Buffer)?;
+        if let Self::Transparent(_) = self {
+            output.copy_from_slice(data);
+        } else {
+            let mut pos = 0;
+            gen_frame(self, |byte| {
+                output[pos] = byte;
+                pos += 1;
+            })?;
+        }
+        Ok(len)
+    }
+}
+
+// Only translate if we can reconstruct byte for byte.
+fn translate(input: &[u8], extended: bool) -> Option<Frame<&[u8]>> {
+    if input[6] & 0x61 != 0x60
+        || input[13] & 0x61 != 0x61
+        || (input[6] ^ input[13]) & 0x80 == 0
+        || input[..6]
+            .iter()
+            .chain(&input[7..13])
+            .any(|&ch| ch & 1 != 0 || !(0x40..=0xbe).contains(&ch))
+    {
+        return None;
+    }
+    let mut dst = [0; 6];
+    let mut src = [0; 6];
+    for i in 0..6 {
+        dst[i] = input[i] >> 1;
+        src[i] = input[i + 7] >> 1;
+    }
+    let dst = Call::from_parts(dst, input[6] >> 1 & 0x0f);
+    let src = Call::from_parts(src, input[13] >> 1 & 0x0f);
+    let ctl = input[14];
+    if extended && ctl & 3 != 3 {
+        return None;
+    }
+    let poll = ctl & 0x10 != 0;
+    let command = input[6] & 0x80 != 0;
+    let has_pid = ctl & 1 == 0 || ctl & !0x10 == 0x03;
+    let pid = if has_pid {
+        let code = *input.get(15)?;
+        let pid = Pid::from_ax25(code).ok()?;
+        if pid.to_ax25() != code {
+            return None;
+        }
+        pid
+    } else {
+        Pid::NONE
+    };
+    let control = if ctl & 1 == 0 {
+        if !command {
+            return None;
+        }
+        Control::I {
+            nr: ctl >> 5,
+            ns: ctl >> 1 & 7,
+            poll,
+            pid,
+        }
+    } else if ctl & 3 == 1 {
+        Control::S {
+            nr: ctl >> 5,
+            poll,
+            command,
+            kind: s_kind(ctl >> 2 & 3),
+        }
+    } else {
+        let opcode = U_CONTROL.iter().position(|&code| code == ctl & !0x10)?;
+        Control::U {
+            poll,
+            command,
+            kind: u_kind(opcode as u8, pid),
+        }
+    };
+    Some(Frame::Translated {
+        dst,
+        src,
+        control,
+        data: &input[15 + usize::from(has_pid)..],
+    })
 }

@@ -19,8 +19,10 @@ use core::fmt;
 pub enum Error {
     /// The supplied IL2P frame fields are invalid.
     Frame,
-    /// The IL2P payload exceeds 1023 bytes.
+    /// The IL2P payload is > 1023 bytes or the burst size overflows.
     TooLong,
+    /// The caller's output buffer is too small.
+    Buffer,
     /// The input ends before the declared packet length.
     Truncated,
     /// The sync word is missing or invalid.
@@ -29,7 +31,8 @@ pub enum Error {
     Header,
     /// A payload RS block can't be recovered.
     Payload,
-    /// The optional trailing CRC is missing, malformed, or doesn't match.
+    /// The optional trailing CRC is malformed or doesn't match.
+    /// Missing bytes return [`Error::Truncated`].
     Crc,
 }
 
@@ -37,7 +40,8 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Frame => "invalid IL2P frame",
-            Self::TooLong => "IL2P payload exceeds 1023 bytes",
+            Self::TooLong => "IL2P payload or burst too long",
+            Self::Buffer => "output buffer too small",
             Self::Truncated => "truncated IL2P packet",
             Self::Sync => "IL2P sync word not found",
             Self::Header => "invalid IL2P header",
@@ -47,4 +51,4 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}

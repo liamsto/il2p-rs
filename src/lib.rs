@@ -14,6 +14,9 @@
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+#![no_std]
+
+extern crate alloc;
 
 mod ax25;
 mod crc;
@@ -25,7 +28,7 @@ mod scramble;
 
 pub use error::Error;
 pub use frame::{
-    Crc, Decoded, MAX_PACKET, MAX_PAYLOAD, PREAMBLE, Receiver, SYNC, SYNC_WORD, decode, encode,
-    encode_burst,
+    Crc, Decoded, MAX_PACKET, MAX_PAYLOAD, PREAMBLE, Receiver, SYNC, SYNC_WORD, decode,
+    decode_into, encode, encode_burst, encode_into,
 };
 pub use packet::{Call, Control, Frame, Pid, SKind, UKind};

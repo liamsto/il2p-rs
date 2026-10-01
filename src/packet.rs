@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use alloc::vec::Vec;
+
 use crate::Error;
 
 /// A callsign and four-bit secondary station identifier.
@@ -73,7 +75,8 @@ impl Pid {
     pub const THENET: Self = Self(0xe);
     pub const NONE: Self = Self(0xf);
 
-    /// Create an identifier from its four-bit code.
+    /// Create an identifier from its four-bit IL2P code.
+    /// Use [`Self::from_ax25`] for an AX.25 PID byte such as `0xf0`.
     pub const fn new(code: u8) -> Result<Self, Error> {
         if code >= 2 && code <= 0x0f {
             Ok(Self(code))
@@ -85,6 +88,43 @@ impl Pid {
     /// Get the four bit code.
     pub const fn code(self) -> u8 {
         self.0
+    }
+
+    /// Translates AX.25 PID byte to an IL2P identifier.
+    ///
+    /// Layer 3 PIDs matching `yy01yyyy` or `yy10yyyy` become [`Self::LAYER3`].
+    /// Their original bits can't be retained by a Type 1 header, so you must use transparent
+    /// encapsulation when required.
+    ///
+    /// ```
+    /// use il2p::Pid;
+    /// assert_eq!(Pid::from_ax25(0xf0)?, Pid::NONE);
+    /// assert_eq!(Pid::IP.to_ax25(), 0xcc);
+    /// # Ok::<(), il2p::Error>(())
+    /// ```
+    pub const fn from_ax25(code: u8) -> Result<Self, Error> {
+        match code {
+            0x01 => Ok(Self::ISO_8208),
+            0x06 => Ok(Self::TCP_COMPRESSED),
+            0x07 => Ok(Self::TCP),
+            0x08 => Ok(Self::SEGMENT),
+            0xcc => Ok(Self::IP),
+            0xcd => Ok(Self::ARP),
+            0xce => Ok(Self::FLEXNET),
+            0xcf => Ok(Self::THENET),
+            0xf0 => Ok(Self::NONE),
+            _ if code & 0x30 == 0x10 || code & 0x30 == 0x20 => Ok(Self::LAYER3),
+            _ => Err(Error::Frame),
+        }
+    }
+
+    /// Return the AX.25 PID byte. Layer 3 -> `0x20`, future -> `0xf0`.
+    pub const fn to_ax25(self) -> u8 {
+        const PID: [u8; 16] = [
+            0xf0, 0xf0, 0x20, 0x01, 0x06, 0x07, 0x08, 0xf0, 0xf0, 0xf0, 0xf0, 0xcc, 0xcd, 0xce,
+            0xcf, 0xf0,
+        ];
+        PID[self.0 as usize]
     }
 }
 
@@ -113,7 +153,7 @@ pub enum UKind {
 /// Control fields represented by a Type 1 header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Control {
-    /// Information frame. Type 1 info frames are always commands.
+    /// Information frame. Type 1 info frames are commands.
     I {
         nr: u8,
         ns: u8,
@@ -135,16 +175,26 @@ pub enum Control {
     },
 }
 
-/// Data carried by a packet.
+/// Data carried by a packet. Can be owned (`Vec<u8>`) or borrowed
+/// (`&[u8]` or `&mut [u8]`) since the codec accepts anything implementing `AsRef<[u8]>`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Frame {
-    /// Type 0 opaque encapsulation.
-    Transparent(Vec<u8>),
+pub enum Frame<B = Vec<u8>> {
+    /// Type 0 opaque encapsulation, containing 14–1023 bytes.
+    Transparent(B),
     /// Type 1 translated control, addressing, and information.
     Translated {
         dst: Call,
         src: Call,
         control: Control,
-        data: Vec<u8>,
+        data: B,
     },
+}
+
+impl<B: AsRef<[u8]>> Frame<B> {
+    /// Borrow the payload (the entire encapsulated frame for Type 0).
+    pub fn data(&self) -> &[u8] {
+        match self {
+            Self::Transparent(data) | Self::Translated { data, .. } => data.as_ref(),
+        }
+    }
 }

@@ -246,6 +246,8 @@ pub fn decode(code: &mut [u8], data_len: usize, nsym: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     fn codeword(nsym: usize) -> Vec<u8> {
