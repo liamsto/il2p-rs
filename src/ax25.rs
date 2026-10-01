@@ -309,8 +309,8 @@ impl<'a> Frame<&'a [u8]> {
     ///
     /// U frames have the same layout in both modes.
     ///
-    /// The caller is responsible for AX.25 validity, but checks are done for length and
-    /// to see if it can be represented losslessly. Allocation/copy free..
+    /// The caller needs to pass valid AX.25, but checks are done for length and
+    /// to see if it can be represented losslessly. Allocation/copy free.
     ///
     /// ```
     /// use il2p::Frame;
